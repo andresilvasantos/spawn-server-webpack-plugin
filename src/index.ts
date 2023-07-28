@@ -27,6 +27,9 @@ class SpawnServerPlugin extends EventEmitter {
         xfwd: true,
         target: true,
         logLevel: "silent",
+        onProxyReq: (proxyReq, req, res) => {
+            res.on('close', () => proxyReq.destroy())
+        },
         router: (): string | Promise<string> => {
           if (this.listening) return getAddress(this);
           return new Promise<string>((resolve) => {
@@ -161,7 +164,7 @@ class SpawnServerPlugin extends EventEmitter {
   };
   // Kills any running child process.
   private _close = (done?: () => void): void => {
-    if (!this._started) {
+    if (!this._started || !this.canKill) {
       done && done();
       return;
     }
@@ -169,9 +172,17 @@ class SpawnServerPlugin extends EventEmitter {
     // Check if we need to close the existing server.
     if (this._worker!.isDead()) {
       done && setImmediate(() => this.emit(EVENT.RESTART));
-    } else {
+    }
+    else if(this.worker.process.pid != this.lastProcessKilledPID) {
       this._worker!.once("exit", () => this.emit(EVENT.RESTART));
       this._worker!.kill("SIGKILL");
+
+      this.lastProcessKilledPID = this.worker.process.provided
+      this.canKill = false
+
+      setTimeout(() => {
+        this.canKill = true
+      }, 1000)
     }
 
     this.listening = false;
@@ -187,6 +198,7 @@ class SpawnServerPlugin extends EventEmitter {
    * Saves the server address.
    */
   private _onListening = (address: AddressInfo): void => {
+    this.canKill = true
     this.listening = true;
     this.address = address;
     this.emit(EVENT.LISTENING);
