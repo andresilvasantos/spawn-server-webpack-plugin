@@ -9,9 +9,6 @@
 node_modules
 npm-debug.log
 
-# Build
-dist
-
 # Coverage
 coverage
 .nyc_output
