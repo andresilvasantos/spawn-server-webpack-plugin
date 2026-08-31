@@ -4,16 +4,7 @@ const fs = require("fs");
 const Module = require("module");
 
 process.on("message", data => {
-  if (!data) return;
-  if (data.action === "shutdown") {
-    if (global.__serverShutdown) {
-      global.__serverShutdown("IPC_SHUTDOWN");
-    } else {
-      process.exit(0);
-    }
-    return;
-  }
-  if (data.action !== "spawn") return;
+  if (!data || data.action !== "spawn") return;
   // Monkey patch asset loading.
   const entry = data.entry;
   const assets = data.assets;
