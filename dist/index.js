@@ -58,6 +58,7 @@ class SpawnServerPlugin extends events_1.EventEmitter {
         this._hash = "";
         this._started = false;
         this._worker = null;
+        this.canKill = true;
         // Loads output from memory into a new node process.
         this._reload = (stats) => {
             const compilation = stats.compilation;
@@ -129,10 +130,17 @@ class SpawnServerPlugin extends events_1.EventEmitter {
         };
         // Kills any running child process.
         this._close = (done) => {
-            if (!this._started || !this.canKill) {
+            if (!this._started) {
                 done && done();
                 return;
             }
+            
+            if (!this.canKill) {
+                // A kill is already in flight — wait for it to complete.
+                done && this.once(EVENT.RESTART, done);
+                return;
+            }
+            
             // Check if we need to close the existing server.
             if (this._worker.isDead()) {
                 done && setImmediate(() => this.emit(EVENT.RESTART));
