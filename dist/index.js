@@ -42,14 +42,24 @@ class SpawnServerPlugin extends events_1.EventEmitter {
                         });
                     },
                     onError: (err, req, res) => {
+                        if (res.headersSent) {
+                            if (!res.writableEnded) {
+                                try {
+                                    res.end();
+                                } catch (e) {}
+                            }
+                            return;
+                        }
                         if (this.listening) {
                             console.error(err);
                         }
                         else {
-                            res.writeHead(200, {
-                                Refresh: `0 url=${req.url}`,
-                            });
-                            res.end();
+                            try {
+                                res.writeHead(200, {
+                                    Refresh: `0 url=${req.url}`,
+                                });
+                                res.end();
+                            } catch (e) {}
                         }
                     },
                 },
@@ -58,7 +68,6 @@ class SpawnServerPlugin extends events_1.EventEmitter {
         this._hash = "";
         this._started = false;
         this._worker = null;
-        this.canKill = true;
         // Loads output from memory into a new node process.
         this._reload = (stats) => {
             const compilation = stats.compilation;
@@ -67,7 +76,7 @@ class SpawnServerPlugin extends events_1.EventEmitter {
             // Only runs in watch mode.
             if (!WATCHING_COMPILERS.has(compiler))
                 return;
-            // Don't reload if there was errors.
+            // Don't reload if there were errors.
             if (stats.hasErrors())
                 return;
             const { assets, hash } = toSources(stats.compilation);
@@ -75,19 +84,13 @@ class SpawnServerPlugin extends events_1.EventEmitter {
             if (hash === this._hash)
                 return;
             this._hash = hash;
-            // Kill existing process.
+            // Kill existing process and spawn new one.
             this._close(() => {
                 // Server is started based off files emitted from the main entry.
-                // eslint-disable-next-line
-                var _a;
                 let mainChunk = undefined;
-                // eslint-disable-next-line
-                const files = (_a = stats.compilation.entrypoints
-                    .get(this._options.mainEntry)) === null || _a === void 0 ? void 0 : _a.getRuntimeChunk().files;
+                const entrypoint = stats.compilation.entrypoints.get(this._options.mainEntry);
+                const files = entrypoint ? entrypoint.getRuntimeChunk().files : undefined;
                 if (files) {
-                    // Read the first file using iteration protocol.
-                    // webpack 5 uses a Set, while webpack 4 uses an array.
-                    // This will work for both and is more efficient.
                     for (mainChunk of files)
                         break;
                 }
@@ -130,46 +133,57 @@ class SpawnServerPlugin extends events_1.EventEmitter {
         };
         // Kills any running child process.
         this._close = (done) => {
-            if (!this._started) {
+            if (!this._started || !this._worker || this._worker.isDead()) {
+                this.listening = false;
                 done && done();
                 return;
             }
-            
-            if (!this.canKill) {
-                // A kill is already in flight — wait for it to complete.
-                done && this.once(EVENT.RESTART, done);
-                return;
-            }
-            
-            // Check if we need to close the existing server.
-            if (this._worker.isDead()) {
-                done && setImmediate(() => this.emit(EVENT.RESTART));
-            }
-            else if(this._worker.process.pid != this.lastProcessKilledPID) {
-                this._worker.once("exit", () => this.emit(EVENT.RESTART));
-                this._worker.kill("SIGTERM");
-
-                this.lastProcessKilledPID = this._worker.process.pid;
-
-                this.canKill = false;
-
-                setTimeout(() => {
-                    this.canKill = true;
-                }, 1000)
-            }
-
             this.listening = false;
             this.emit(EVENT.CLOSING);
-            // Ensure that we only start the most recent router.
-            this.removeAllListeners(EVENT.RESTART);
-            done && this.once(EVENT.RESTART, done);
+
+            const worker = this._worker;
+            let finished = false;
+
+            const finish = () => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(forceKillTimer);
+                done && done();
+            };
+
+            // Safety fallback: force kill if graceful shutdown doesn't exit within 3000ms
+            const forceKillTimer = setTimeout(() => {
+                if (!finished && worker && !worker.isDead()) {
+                    try {
+                        worker.kill();
+                    }
+                    catch (e) {}
+                }
+            }, 3000);
+
+            worker.once("exit", finish);
+
+            // Request graceful shutdown via IPC message
+            try {
+                if (worker.isConnected && worker.isConnected()) {
+                    worker.send({ action: "shutdown" });
+                }
+                else {
+                    worker.kill();
+                }
+            }
+            catch (e) {
+                try {
+                    worker.kill();
+                }
+                catch (err) {}
+            }
         };
         /**
          * Called once the spawned process has a server started/listening.
          * Saves the server address.
          */
         this._onListening = (address) => {
-            this.canKill = true;
             this.listening = true;
             this.address = address;
             this.emit(EVENT.LISTENING);
@@ -183,7 +197,6 @@ class SpawnServerPlugin extends events_1.EventEmitter {
     apply(compiler) {
         compiler.hooks.done.tap(PLUGIN_NAME, this._reload);
         compiler.hooks.watchClose.tap(PLUGIN_NAME, this._close);
-        compiler.hooks.make.tap(PLUGIN_NAME, () => (this.listening = false)); // Mark the server as not listening while we try to rebuild.
         compiler.hooks.watchRun.tap(PLUGIN_NAME, () => WATCHING_COMPILERS.add(compiler)); // Track watch mode.
     }
 }
@@ -200,6 +213,7 @@ function toSources(compilation) {
     const assets = {};
     const hash = crypto_1.default.createHash("md5");
     for (const assetPath in compilation.assets) {
+        if (assetPath.endsWith('.map')) continue;
         const asset = compilation.assets[assetPath];
         const existsAt = asset.existsAt ||
             (path_1.default.isAbsolute(assetPath)
@@ -218,4 +232,3 @@ function toSources(compilation) {
 }
 typeof module === "object" && (module.exports = exports = SpawnServerPlugin);
 exports.default = SpawnServerPlugin;
-//# sourceMappingURL=index.js.map
