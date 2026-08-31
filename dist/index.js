@@ -129,7 +129,7 @@ class SpawnServerPlugin extends events_1.EventEmitter {
         };
         // Kills any running child process.
         this._close = (done) => {
-            if (!this._started || !this.canKil) {
+            if (!this._started || !this.canKill) {
                 done && done();
                 return;
             }
@@ -139,7 +139,7 @@ class SpawnServerPlugin extends events_1.EventEmitter {
             }
             else if(this._worker.process.pid != this.lastProcessKilledPID) {
                 this._worker.once("exit", () => this.emit(EVENT.RESTART));
-                this._worker.kill("SIGKILL");
+                this._worker.kill("SIGTERM");
 
                 this.lastProcessKilledPID = this._worker.process.pid;
 
